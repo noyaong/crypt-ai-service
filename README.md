@@ -1,6 +1,6 @@
 # Crypto AI Analysis Service
 
-MacBook MPS(Metal) + PyTorch 기반 암호화폐 AI 분석 서비스
+PyTorch 기반 암호화폐 AI 분석 서비스 (CUDA / MPS / CPU 자동 지원)
 
 ---
 
@@ -50,8 +50,18 @@ MacBook MPS(Metal) + PyTorch 기반 암호화폐 AI 분석 서비스
 ### 요구사항
 
 - Python 3.11+
-- macOS (Apple Silicon 권장)
 - uv 패키지 매니저
+- GPU (선택, 자동 감지)
+
+### 지원 디바이스
+
+| 우선순위 | 디바이스 | 환경 |
+|----------|----------|------|
+| 1 | CUDA | NVIDIA GPU (Windows/Linux) |
+| 2 | MPS | Apple Silicon (M1/M2/M3) |
+| 3 | CPU | fallback (모든 환경) |
+
+> 디바이스는 자동 감지됩니다. GPU가 없어도 CPU로 동작합니다.
 
 ### 설치 방법
 

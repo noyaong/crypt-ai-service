@@ -9,10 +9,23 @@ from crypto_ai.models import TrendDirection
 
 
 def get_device() -> torch.device:
-    """MacBook의 MPS(Metal Performance Shaders) 또는 CPU 반환"""
-    if torch.backends.mps.is_available():
-        if torch.backends.mps.is_built():
-            return torch.device("mps")
+    """
+    최적의 연산 디바이스 자동 선택
+
+    우선순위:
+    1. CUDA (NVIDIA GPU)
+    2. MPS (Apple Silicon GPU)
+    3. CPU (fallback)
+    """
+    # NVIDIA GPU
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+
+    # Apple Silicon GPU
+    if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+        return torch.device("mps")
+
+    # CPU fallback
     return torch.device("cpu")
 
 

@@ -266,7 +266,7 @@ total_loss = 1.0 * direction_loss    # 가격 방향 (주요)
 - ✅ 충분한 데이터 (> 5000개)
 - ✅ 변동성/거래량 예측도 필요
 - ✅ 예측 근거를 분석하고 싶을 때
-- ✅ Apple Silicon Mac (MPS 가속)
+- ✅ GPU 가속 (CUDA/MPS) 또는 CPU
 
 ### 권장 설정
 
@@ -311,4 +311,5 @@ uv run python scripts/train_transformer.py \
 
 - [Attention Is All You Need](https://arxiv.org/abs/1706.03762) - Transformer 원 논문
 - [LSTM 이해하기](https://colah.github.io/posts/2015-08-Understanding-LSTMs/)
+- [PyTorch CUDA](https://pytorch.org/docs/stable/cuda.html)
 - [PyTorch MPS Backend](https://pytorch.org/docs/stable/notes/mps.html)

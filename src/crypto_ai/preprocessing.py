@@ -136,10 +136,8 @@ class DataPipeline:
         try:
             fng_df = self.fng_client.get_fear_greed_history(days=min(days, 365))
             if not fng_df.empty and 'timestamp' in fng_df.columns:
-                # timestamp가 이미 숫자인 경우와 문자열인 경우 처리
-                fng_df['timestamp'] = pd.to_numeric(fng_df['timestamp'], errors='coerce')
-                fng_df = fng_df.dropna(subset=['timestamp'])
-                fng_df['timestamp'] = pd.to_datetime(fng_df['timestamp'], unit='s', errors='coerce')
+                # timestamp를 datetime으로 변환 (이미 datetime이면 그대로 유지)
+                fng_df['timestamp'] = pd.to_datetime(fng_df['timestamp'], errors='coerce')
                 fng_df = fng_df.dropna(subset=['timestamp'])
                 fng_df['value'] = pd.to_numeric(fng_df['value'], errors='coerce').fillna(50)
                 fng_df = fng_df.set_index('timestamp').sort_index()

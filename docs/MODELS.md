@@ -215,7 +215,52 @@ visualize_attention(outputs["attention"], save_path="attention.png")
 
 ## 멀티태스크 학습
 
-Transformer 모델은 세 가지 태스크를 동시에 학습합니다:
+Transformer 모델은 세 가지 태스크를 동시에 학습합니다.
+
+### 아키텍처
+
+동일한 Transformer 인코더를 공유하고, 별도의 출력 헤드에서 각각 계산됩니다.
+
+```
+입력 (60시간 × 13특성)
+        ↓
+┌─────────────────────────┐
+│  Transformer Encoder    │  ← 공유 (패턴 학습)
+│  (Attention + FFN)      │
+└─────────────────────────┘
+        ↓
+   Global Pooling
+        ↓
+┌───────┬───────┬───────┐
+│ Head1 │ Head2 │ Head3 │  ← 별도 출력층
+└───────┴───────┴───────┘
+    ↓       ↓       ↓
+  방향   변동성   거래량
+(3클래스) (회귀)  (회귀)
+```
+
+### 타겟 계산 방식
+
+각 예측의 타겟은 `preprocessing.py`에서 다음과 같이 계산됩니다:
+
+| 예측 | 타겟 계산 | 출력 |
+|------|----------|------|
+| **방향** | 다음 봉 종가 변화율 > ±0.5% | 상승/하락/횡보 |
+| **변동성** | `(고가-저가) / 종가` | 정규화된 값 |
+| **거래량** | `(다음거래량-현재거래량) / 현재거래량` | 정규화된 값 |
+
+```python
+# 방향 레이블
+future_returns = df["close"].shift(-1) / df["close"] - 1
+labels = np.where(future_returns > 0.005, 2,      # 상승
+         np.where(future_returns < -0.005, 0, 1)) # 하락/횡보
+
+# 변동성 타겟
+volatility = (future_high - future_low) / future_close
+
+# 거래량 변화 타겟
+volume_change = (future_volume - current_volume) / current_volume
+```
 
 ### 1. 가격 방향 예측 (분류)
 

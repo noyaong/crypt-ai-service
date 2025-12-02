@@ -244,6 +244,37 @@ uv run python scripts/train_transformer.py \
 | `--num-heads` | Attention 헤드 수 | 4 |
 | `--num-layers` | 레이어 수 | 3 |
 
+### 학습 옵션 예시
+
+```bash
+uv run python scripts/train_transformer.py --symbol AVAX --days 90 --epochs 20 --multi-task
+```
+
+| 옵션 | 의미 |
+|------|------|
+| `--days 90` | 90일치 1시간봉 = 약 2,160개 데이터 |
+| `--epochs 20` | 전체 데이터를 20번 반복 학습 |
+| `--multi-task` | 방향 + 변동성 + 거래량 동시 예측 |
+
+### Epoch (에폭) 이란?
+
+**Epoch**은 전체 학습 데이터를 한 번 완전히 학습하는 단위입니다.
+
+```
+예시: 8,760개 데이터 (1년치 1시간봉), batch_size=32
+
+1 Epoch = 8,760 ÷ 32 = 274번의 학습 반복
+10 Epochs = 전체 데이터를 10번 반복 학습
+```
+
+| Epoch 수 | 특징 |
+|----------|------|
+| 적음 (5~10) | 빠른 테스트, 과소적합 위험 |
+| 보통 (20~50) | 일반적인 학습 |
+| 많음 (100+) | 정밀 학습, 과적합 주의 |
+
+> **Early Stopping**: 검증 손실이 개선되지 않으면 자동 종료됩니다 (기본 patience=15)
+
 ### 학습 모니터링
 
 ```bash

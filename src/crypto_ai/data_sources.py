@@ -903,37 +903,66 @@ class SocialSentimentCollector:
         community = data.get("community_data", {})
         developer = data.get("developer_data", {})
 
-        # 소셜 점수 계산 (정규화된 지표들의 가중 평균)
+        # 소셜 지표 추출
         twitter = community.get("twitter_followers", 0) or 0
         reddit_subs = community.get("reddit_subscribers", 0) or 0
         reddit_active = community.get("reddit_accounts_active_48h", 0) or 0
         telegram = community.get("telegram_channel_user_count", 0) or 0
         github_stars = developer.get("stars", 0) or 0
 
-        # 간단한 소셜 점수 (로그 스케일로 정규화)
+        # 로그 스케일 정규화 함수
         def log_score(value: int, max_expected: int) -> float:
             if value <= 0:
                 return 0
             return min(100, (np.log10(value + 1) / np.log10(max_expected + 1)) * 100)
 
-        social_score = (
-            log_score(twitter, 10_000_000) * 0.3 +
-            log_score(reddit_subs, 5_000_000) * 0.25 +
-            log_score(reddit_active, 50_000) * 0.2 +
-            log_score(telegram, 500_000) * 0.15 +
-            log_score(github_stars, 100_000) * 0.1
-        )
+        # 데이터가 있는 항목만 점수 계산에 포함 (0이나 null은 "연동 안됨"으로 판단)
+        score_components = []
+        weight_sum = 0.0
+
+        if twitter > 0:
+            score_components.append(log_score(twitter, 10_000_000) * 0.3)
+            weight_sum += 0.3
+        if reddit_subs > 0:
+            score_components.append(log_score(reddit_subs, 5_000_000) * 0.25)
+            weight_sum += 0.25
+        if reddit_active > 0:
+            score_components.append(log_score(reddit_active, 50_000) * 0.2)
+            weight_sum += 0.2
+        if telegram > 0:
+            score_components.append(log_score(telegram, 500_000) * 0.15)
+            weight_sum += 0.15
+        if github_stars > 0:
+            score_components.append(log_score(github_stars, 100_000) * 0.1)
+            weight_sum += 0.1
+
+        # 가중 평균 계산 (데이터 있는 항목들로만)
+        if weight_sum > 0:
+            social_score = sum(score_components) / weight_sum * 100 / 100
+        else:
+            social_score = None  # 데이터 없음
+
+        # 연동된 소스 수 계산
+        connected_sources = sum([
+            twitter > 0,
+            reddit_subs > 0,
+            reddit_active > 0,
+            telegram > 0,
+            github_stars > 0,
+        ])
 
         return {
             "symbol": symbol.upper(),
-            "twitter_followers": twitter,
-            "reddit_subscribers": reddit_subs,
-            "reddit_active_users": reddit_active,
-            "telegram_users": telegram,
-            "github_stars": github_stars,
-            "github_forks": developer.get("forks", 0) or 0,
-            "github_commits_4w": developer.get("commit_count_4_weeks", 0) or 0,
-            "social_score": round(social_score, 1),
+            "twitter_followers": twitter if twitter > 0 else None,
+            "reddit_subscribers": reddit_subs if reddit_subs > 0 else None,
+            "reddit_active_users": reddit_active if reddit_active > 0 else None,
+            "telegram_users": telegram if telegram > 0 else None,
+            "github_stars": github_stars if github_stars > 0 else None,
+            "github_forks": developer.get("forks", 0) or None,
+            "github_commits_4w": developer.get("commit_count_4_weeks", 0) or None,
+            "social_score": round(social_score, 1) if social_score is not None else None,
+            "connected_sources": connected_sources,  # 연동된 소스 수
+            "total_sources": 5,  # 전체 소스 수
         }
 
 

@@ -7,6 +7,7 @@
   - Fear & Greed: https://alternative.me/crypto/fear-and-greed-index/#api
 """
 
+import os
 from datetime import datetime, timedelta
 from typing import Callable, Literal
 import time
@@ -651,6 +652,389 @@ class UnifiedDataCollector:
             "volume_24h": coin_data.get("usd_24h_vol", 0),
             "market_cap": coin_data.get("usd_market_cap", 0),
         }
+
+
+# ============================================================
+# CryptoPanic API Client (무료, 뉴스/소셜 센티멘트)
+# ============================================================
+
+class CryptoPanicClient:
+    """
+    CryptoPanic 공개 API 클라이언트
+    - 무료 (API 키 필요, https://cryptopanic.com/developers/api/)
+    - 암호화폐 뉴스 및 소셜 미디어 센티멘트
+    - API 키 없이도 제한적 사용 가능
+    """
+
+    BASE_URL = "https://cryptopanic.com/api/developer/v2"
+
+    def __init__(self, api_key: str | None = None):
+        """
+        Args:
+            api_key: CryptoPanic API 키 (선택, 없으면 제한적 기능)
+        """
+        self.api_key = api_key
+
+    def _request(self, endpoint: str, params: dict | None = None) -> dict:
+        """API 요청"""
+        params = params or {}
+        if self.api_key:
+            params["auth_token"] = self.api_key
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Accept": "application/json",
+        }
+
+        with httpx.Client(headers=headers) as client:
+            response = client.get(
+                f"{self.BASE_URL}{endpoint}",
+                params=params,
+                timeout=30,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    def get_posts(
+        self,
+        currencies: str | list[str] | None = None,
+        filter: Literal["rising", "hot", "bullish", "bearish", "important", "saved", "lol"] | None = None,
+        kind: Literal["news", "media", "all"] = "news",
+        regions: str = "en",
+        public: bool = True,
+        limit: int = 20,
+    ) -> list[dict]:
+        """
+        뉴스/미디어 포스트 조회
+
+        Args:
+            currencies: 코인 심볼 (예: "BTC" 또는 ["BTC", "ETH"])
+            filter: 필터 옵션
+                - rising: 상승 중인 뉴스
+                - hot: 핫한 뉴스
+                - bullish: 긍정적 뉴스
+                - bearish: 부정적 뉴스
+                - important: 중요 뉴스
+            kind: 종류 (news, media, all) - 기본값 news
+            regions: 지역 필터 (en, ko, de, es, fr 등) - 기본값 en
+            public: 공개 API 사용 여부
+            limit: 결과 개수
+
+        Returns:
+            [
+                {
+                    "id": 123,
+                    "title": "...",
+                    "published_at": "2024-01-01T12:00:00Z",
+                    "source": {"title": "CoinDesk", "domain": "coindesk.com"},
+                    "currencies": [{"code": "BTC", "title": "Bitcoin"}],
+                    "votes": {"positive": 10, "negative": 2, "important": 5, "liked": 3, ...},
+                    ...
+                },
+                ...
+            ]
+        """
+        params = {
+            "public": str(public).lower(),
+            "kind": kind,
+            "regions": regions,
+        }
+
+        if currencies:
+            if isinstance(currencies, list):
+                currencies = ",".join(currencies)
+            params["currencies"] = currencies.upper()
+
+        if filter:
+            params["filter"] = filter
+
+        result = self._request("/posts/", params)
+        posts = result.get("results", [])
+
+        # limit 적용
+        return posts[:limit]
+
+    def get_sentiment_summary(
+        self,
+        symbol: str,
+        limit: int = 30,
+    ) -> dict:
+        """
+        특정 코인의 뉴스 센티멘트 요약
+
+        Args:
+            symbol: 코인 심볼 (예: BTC, ETH, AVAX)
+            limit: 분석할 뉴스 개수
+
+        Returns:
+            {
+                "symbol": "BTC",
+                "total_posts": 30,
+                "bullish_count": 10,
+                "bearish_count": 5,
+                "important_count": 8,
+                "hot_count": 12,
+                "sentiment_score": 0.2,
+                "recent_headlines": [...],
+            }
+        """
+        # 전체 뉴스 가져오기 (news only, 영어)
+        all_posts = self.get_posts(currencies=symbol, kind="news", regions="en", limit=limit)
+
+        # 다양한 필터로 뉴스 가져오기
+        bullish_posts = self.get_posts(currencies=symbol, filter="bullish", kind="news", limit=limit)
+        bearish_posts = self.get_posts(currencies=symbol, filter="bearish", kind="news", limit=limit)
+        important_posts = self.get_posts(currencies=symbol, filter="important", kind="news", limit=limit)
+        hot_posts = self.get_posts(currencies=symbol, filter="hot", kind="news", limit=limit)
+
+        total = len(all_posts)
+        bullish_count = len(bullish_posts)
+        bearish_count = len(bearish_posts)
+        important_count = len(important_posts)
+        hot_count = len(hot_posts)
+
+        # 센티멘트 점수 계산 (-1 ~ +1)
+        if total > 0:
+            sentiment_score = (bullish_count - bearish_count) / total
+            bullish_ratio = bullish_count / total
+            bearish_ratio = bearish_count / total
+        else:
+            sentiment_score = 0.0
+            bullish_ratio = 0.0
+            bearish_ratio = 0.0
+
+        # bullish/bearish post ID 집합
+        bullish_ids = {p.get("id") for p in bullish_posts}
+        bearish_ids = {p.get("id") for p in bearish_posts}
+        important_ids = {p.get("id") for p in important_posts}
+
+        # 최근 헤드라인 (중요 뉴스 우선)
+        def get_sentiment(post):
+            pid = post.get("id")
+            if pid in bullish_ids:
+                return "bullish"
+            elif pid in bearish_ids:
+                return "bearish"
+            return "neutral"
+
+        # important 뉴스를 먼저, 그 다음 최신 뉴스
+        sorted_posts = sorted(
+            all_posts,
+            key=lambda p: (p.get("id") not in important_ids, p.get("published_at", "")),
+            reverse=True
+        )
+
+        recent_headlines = [
+            {
+                "title": post.get("title", ""),
+                "source": post.get("source", {}).get("title", "Unknown"),
+                "published_at": post.get("published_at", ""),
+                "sentiment": get_sentiment(post),
+                "is_important": post.get("id") in important_ids,
+                "is_hot": post.get("id") in {p.get("id") for p in hot_posts},
+            }
+            for post in sorted_posts[:10]
+        ]
+
+        return {
+            "symbol": symbol.upper(),
+            "total_posts": total,
+            "bullish_count": bullish_count,
+            "bearish_count": bearish_count,
+            "important_count": important_count,
+            "hot_count": hot_count,
+            "bullish_ratio": round(bullish_ratio, 3),
+            "bearish_ratio": round(bearish_ratio, 3),
+            "sentiment_score": round(sentiment_score, 3),
+            "recent_headlines": recent_headlines,
+        }
+
+
+# ============================================================
+# LunarCrush Alternative (무료 소셜 센티멘트)
+# ============================================================
+
+class SocialSentimentCollector:
+    """
+    소셜 미디어 센티멘트 수집기 (CoinGecko 활용)
+    - CoinGecko의 community_data 및 developer_data 활용
+    - 추가 비용 없이 기본적인 소셜 지표 수집
+    """
+
+    def __init__(self):
+        self.coingecko = CoinGeckoClient()
+
+    def get_social_metrics(self, symbol: str) -> dict | None:
+        """
+        소셜 미디어 지표 수집
+
+        Args:
+            symbol: 코인 심볼
+
+        Returns:
+            {
+                "symbol": "BTC",
+                "twitter_followers": 5000000,
+                "reddit_subscribers": 4000000,
+                "reddit_active_users": 5000,
+                "telegram_users": 100000,
+                "github_stars": 70000,
+                "github_forks": 35000,
+                "github_commits_4w": 100,
+                "social_score": 85,  # 0-100
+            }
+        """
+        coin_id = symbol_to_coingecko_id(symbol.upper())
+        if not coin_id:
+            return None
+
+        try:
+            # CoinGecko coin detail API
+            data = self.coingecko._request(f"/coins/{coin_id}", {
+                "localization": "false",
+                "tickers": "false",
+                "market_data": "false",
+                "community_data": "true",
+                "developer_data": "true",
+            })
+        except Exception:
+            return None
+
+        community = data.get("community_data", {})
+        developer = data.get("developer_data", {})
+
+        # 소셜 점수 계산 (정규화된 지표들의 가중 평균)
+        twitter = community.get("twitter_followers", 0) or 0
+        reddit_subs = community.get("reddit_subscribers", 0) or 0
+        reddit_active = community.get("reddit_accounts_active_48h", 0) or 0
+        telegram = community.get("telegram_channel_user_count", 0) or 0
+        github_stars = developer.get("stars", 0) or 0
+
+        # 간단한 소셜 점수 (로그 스케일로 정규화)
+        def log_score(value: int, max_expected: int) -> float:
+            if value <= 0:
+                return 0
+            return min(100, (np.log10(value + 1) / np.log10(max_expected + 1)) * 100)
+
+        social_score = (
+            log_score(twitter, 10_000_000) * 0.3 +
+            log_score(reddit_subs, 5_000_000) * 0.25 +
+            log_score(reddit_active, 50_000) * 0.2 +
+            log_score(telegram, 500_000) * 0.15 +
+            log_score(github_stars, 100_000) * 0.1
+        )
+
+        return {
+            "symbol": symbol.upper(),
+            "twitter_followers": twitter,
+            "reddit_subscribers": reddit_subs,
+            "reddit_active_users": reddit_active,
+            "telegram_users": telegram,
+            "github_stars": github_stars,
+            "github_forks": developer.get("forks", 0) or 0,
+            "github_commits_4w": developer.get("commit_count_4_weeks", 0) or 0,
+            "social_score": round(social_score, 1),
+        }
+
+
+# ============================================================
+# 통합 센티멘트 수집기
+# ============================================================
+
+class SentimentAggregator:
+    """
+    여러 소스에서 센티멘트 데이터를 수집하는 통합 클래스
+
+    사용 예:
+        aggregator = SentimentAggregator()
+        sentiment = aggregator.get_comprehensive_sentiment("BTC")
+    """
+
+    def __init__(self, cryptopanic_api_key: str | None = None):
+        # 환경변수에서 API 키 로드
+        if cryptopanic_api_key is None:
+            cryptopanic_api_key = os.environ.get("CRYPTOPANIC_API_KEY")
+
+        self.fear_greed = AlternativeMeClient()
+        self.news = CryptoPanicClient(api_key=cryptopanic_api_key)
+        self.social = SocialSentimentCollector()
+
+    def get_comprehensive_sentiment(self, symbol: str) -> dict:
+        """
+        종합 센티멘트 데이터 수집
+
+        Args:
+            symbol: 코인 심볼
+
+        Returns:
+            {
+                "symbol": "BTC",
+                "fear_greed": {...},
+                "news_sentiment": {...},
+                "social_metrics": {...},
+                "overall_sentiment": "bullish" | "bearish" | "neutral",
+                "sentiment_score": 0.65,  # -1 ~ +1
+            }
+        """
+        result = {
+            "symbol": symbol.upper(),
+            "fear_greed": None,
+            "news_sentiment": None,
+            "social_metrics": None,
+            "overall_sentiment": "neutral",
+            "sentiment_score": 0.0,
+        }
+
+        scores = []
+        weights = []
+
+        # 1. Fear & Greed Index
+        try:
+            fng = self.fear_greed.get_fear_greed_index()
+            result["fear_greed"] = fng
+            # 0-100을 -1~+1로 변환
+            fng_score = (fng.get("value", 50) - 50) / 50
+            scores.append(fng_score)
+            weights.append(0.3)
+        except Exception:
+            pass
+
+        # 2. 뉴스 센티멘트
+        try:
+            news = self.news.get_sentiment_summary(symbol)
+            result["news_sentiment"] = news
+            scores.append(news.get("sentiment_score", 0))
+            weights.append(0.4)
+        except Exception:
+            pass
+
+        # 3. 소셜 지표
+        try:
+            social = self.social.get_social_metrics(symbol)
+            result["social_metrics"] = social
+            if social:
+                # 소셜 점수를 -1~+1로 변환 (50 기준)
+                social_score = (social.get("social_score", 50) - 50) / 50
+                scores.append(social_score)
+                weights.append(0.3)
+        except Exception:
+            pass
+
+        # 종합 점수 계산
+        if scores and weights:
+            total_weight = sum(weights[:len(scores)])
+            weighted_sum = sum(s * w for s, w in zip(scores, weights[:len(scores)]))
+            overall_score = weighted_sum / total_weight if total_weight > 0 else 0
+            result["sentiment_score"] = round(overall_score, 3)
+
+            if overall_score > 0.2:
+                result["overall_sentiment"] = "bullish"
+            elif overall_score < -0.2:
+                result["overall_sentiment"] = "bearish"
+            else:
+                result["overall_sentiment"] = "neutral"
+
+        return result
 
 
 # ============================================================

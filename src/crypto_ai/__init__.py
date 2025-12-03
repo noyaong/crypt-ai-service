@@ -11,7 +11,14 @@ from crypto_ai.data_sources import (
     AlternativeMeClient,
     BinanceClient,
     CoinGeckoClient,
+    CryptoPanicClient,
+    SentimentAggregator,
     UnifiedDataCollector,
+)
+from crypto_ai.llm_insight import (
+    generate_ai_insight,
+    ProgressCallback,
+    ProgressSteps,
 )
 
 __version__ = "0.1.0"
@@ -27,7 +34,13 @@ __all__ = [
     "AlternativeMeClient",
     "BinanceClient",
     "CoinGeckoClient",
+    "CryptoPanicClient",
+    "SentimentAggregator",
     "UnifiedDataCollector",
+    # LLM 인사이트
+    "generate_ai_insight",
+    "ProgressCallback",
+    "ProgressSteps",
 ]
 
 

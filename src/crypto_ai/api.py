@@ -1,5 +1,7 @@
 """FastAPI 서버"""
 
+import asyncio
+import json
 import os
 from contextlib import asynccontextmanager
 from typing import Annotated
@@ -7,6 +9,7 @@ from typing import Annotated
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 # 전역 서비스 인스턴스
@@ -73,6 +76,14 @@ class PredictionResponse(BaseModel):
     market_sentiment: dict[str, float]  # Fear & Greed, BTC Dominance
     current_price: float
     price_change_24h: float
+
+
+class AIInsightResponse(BaseModel):
+    symbol: str
+    predictions: dict  # interval -> prediction details
+    sentiment: dict | None = None  # 센티멘트 데이터
+    insight: str
+    available_timeframes: list[str]
 
 
 # ============================================================
@@ -191,16 +202,147 @@ async def get_coin_insights(symbol: str):
     return {"symbol": symbol.upper(), "insights": insights}
 
 
+@app.get("/insights/ai/{symbol}", response_model=AIInsightResponse, tags=["AI Insights"])
+async def get_ai_insight(symbol: str):
+    """
+    LLM 기반 멀티 타임프레임 AI 인사이트
+
+    - **symbol**: 코인 심볼 (예: BTC, AVAX)
+
+    모든 학습된 타임프레임(1h, 4h, 1d)의 예측을 수집하고,
+    GPT-4o-mini를 통해 종합적인 투자 인사이트를 생성합니다.
+
+    Returns:
+    - 타임프레임별 예측 결과
+    - LLM 생성 종합 인사이트
+    """
+    from crypto_ai.llm_insight import generate_ai_insight
+
+    try:
+        result = generate_ai_insight(symbol.upper())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"인사이트 생성 실패: {str(e)}")
+
+    if not result["predictions"]:
+        raise HTTPException(
+            status_code=404,
+            detail=f"{symbol.upper()} 학습된 모델이 없습니다. 먼저 모델을 학습하세요."
+        )
+
+    return AIInsightResponse(**result)
+
+
+@app.get("/insights/ai/{symbol}/stream", tags=["AI Insights"])
+async def get_ai_insight_stream(symbol: str):
+    """
+    LLM 기반 멀티 타임프레임 AI 인사이트 (SSE 스트리밍)
+
+    - **symbol**: 코인 심볼 (예: BTC, AVAX)
+
+    Server-Sent Events (SSE)를 통해 분석 진행 상황을 실시간으로 전송합니다.
+
+    Progress Events:
+    - `progress`: 진행 상황 업데이트
+      - `step`: 현재 단계 (init, load_model, fetch_data, predict, collect_sentiment, generate_insight, complete)
+      - `status`: 한글 상태 메시지
+      - `progress`: 0.0 ~ 1.0 진행률
+      - `details`: 추가 정보
+
+    - `result`: 최종 결과 (AIInsightResponse 형식)
+
+    - `error`: 오류 발생 시
+
+    Example (JavaScript):
+    ```javascript
+    const eventSource = new EventSource('/insights/ai/BTC/stream');
+    eventSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'progress') {
+            console.log(`${data.status} (${Math.round(data.progress * 100)}%)`);
+        } else if (data.type === 'result') {
+            console.log('Result:', data.data);
+            eventSource.close();
+        }
+    };
+    ```
+    """
+    from crypto_ai.llm_insight import generate_ai_insight, ProgressSteps
+
+    async def event_generator():
+        progress_events = []
+
+        def progress_callback(step: str, status: str, progress: float, details: dict | None):
+            """진행 상황 콜백 - 이벤트 큐에 추가"""
+            progress_events.append({
+                "type": "progress",
+                "step": step,
+                "status": status,
+                "progress": progress,
+                "details": details or {},
+            })
+
+        # 별도 스레드에서 실행
+        import concurrent.futures
+
+        def run_insight():
+            return generate_ai_insight(
+                symbol.upper(),
+                progress_callback=progress_callback,
+            )
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(run_insight)
+
+            # 진행 상황 이벤트 전송
+            last_sent = 0
+            while not future.done():
+                await asyncio.sleep(0.1)
+
+                # 새 이벤트 전송
+                while last_sent < len(progress_events):
+                    event = progress_events[last_sent]
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    last_sent += 1
+
+            # 남은 이벤트 전송
+            while last_sent < len(progress_events):
+                event = progress_events[last_sent]
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                last_sent += 1
+
+            # 결과 가져오기
+            try:
+                result = future.result()
+                if not result["predictions"]:
+                    yield f"data: {json.dumps({'type': 'error', 'message': f'{symbol.upper()} 학습된 모델이 없습니다.'}, ensure_ascii=False)}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'result', 'data': result}, ensure_ascii=False)}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # nginx 버퍼링 비활성화
+        },
+    )
+
+
 @app.get("/predict/{symbol}", response_model=PredictionResponse, tags=["AI Prediction"])
 async def predict_price(
     symbol: str,
     model: Annotated[str, Query(description="모델 타입")] = "transformer",
+    interval: Annotated[str, Query(description="타임프레임 (1h, 4h, 1d)")] = "1h",
 ):
     """
     AI 모델로 가격 방향 예측
 
     - **symbol**: 코인 심볼 (예: BTC, ETH)
     - **model**: 모델 타입 (transformer 또는 lstm)
+    - **interval**: 타임프레임 (1h: 1시간봉, 4h: 4시간봉, 1d: 일봉)
 
     Returns:
     - 가격 방향 예측 (상승/하락/횡보)
@@ -217,22 +359,30 @@ async def predict_price(
 
     symbol = symbol.upper()
 
-    # 체크포인트 경로 (코인별 디렉토리)
+    # interval 유효성 검사
+    if interval not in ["1h", "4h", "1d"]:
+        raise HTTPException(status_code=400, detail=f"지원하지 않는 interval: {interval}. 1h, 4h, 1d 중 선택하세요.")
+
+    # 체크포인트 경로 (코인별/타임프레임별 디렉토리)
     if model == "transformer":
-        checkpoint_path = Path("checkpoints/transformer") / symbol / "best.pt"
+        checkpoint_path = Path("checkpoints/transformer") / symbol / interval / "best.pt"
     else:
-        checkpoint_path = Path("checkpoints/lstm") / symbol / "best.pt"
+        checkpoint_path = Path("checkpoints/lstm") / symbol / interval / "best.pt"
 
     if not checkpoint_path.exists():
         raise HTTPException(
             status_code=404,
-            detail=f"{symbol} 체크포인트가 없습니다. 먼저 모델을 학습하세요: scripts/train_transformer.py --symbol {symbol}"
+            detail=f"{symbol} ({interval}) 체크포인트가 없습니다. 먼저 모델을 학습하세요: scripts/train_transformer.py --symbol {symbol} --interval {interval}"
         )
 
     device = get_device()
 
-    # 데이터 수집
-    config = DataConfig(symbol=symbol.upper(), interval="1h", days=7, sequence_length=60)
+    # 데이터 수집 (interval별 적절한 설정)
+    days_map = {"1h": 7, "4h": 30, "1d": 90}
+    seq_len_map = {"1h": 60, "4h": 60, "1d": 30}
+    days = days_map.get(interval, 7)
+    seq_len = seq_len_map.get(interval, 60)
+    config = DataConfig(symbol=symbol.upper(), interval=interval, days=days, sequence_length=seq_len)
     pipeline = DataPipeline(config)
 
     try:
@@ -290,6 +440,13 @@ async def predict_price(
     direction_idx = int(probs.argmax())
     latest = df.iloc[-1]
 
+    # 24시간 전 대비 변동률 계산
+    if len(df) >= 24:
+        price_24h_ago = df.iloc[-24]['close']
+        change_24h = (latest['close'] - price_24h_ago) / price_24h_ago * 100
+    else:
+        change_24h = latest['returns'] * 100
+
     return PredictionResponse(
         symbol=symbol,
         model=model,
@@ -312,5 +469,5 @@ async def predict_price(
             "btc_dominance": float(latest["btc_dominance"]),
         },
         current_price=float(latest["close"]),
-        price_change_24h=float(latest["returns"] * 100),
+        price_change_24h=float(change_24h),
     )

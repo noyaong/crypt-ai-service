@@ -395,6 +395,25 @@ class DataPipeline:
         train_end = int(n * self.config.train_ratio)
         val_end = int(n * (self.config.train_ratio + self.config.val_ratio))
 
+        # 데이터 충분성 검증
+        seq_len = self.config.sequence_length
+        train_size = train_end
+        val_size = val_end - train_end
+        test_size = n - val_end
+
+        min_required = seq_len + 1  # 시퀀스 + 최소 1개 샘플
+
+        if train_size < min_required or val_size < min_required or test_size < min_required:
+            interval = self.config.interval
+            required_days = self._estimate_required_days(seq_len, interval)
+            raise ValueError(
+                f"데이터 부족: Train={train_size}, Val={val_size}, Test={test_size} "
+                f"(최소 {min_required} 필요)\n"
+                f"  해결 방법:\n"
+                f"  1. --days 값 증가 (권장: {required_days}일 이상)\n"
+                f"  2. --seq-length 값 감소 (현재: {seq_len})"
+            )
+
         # Train 데이터로 정규화 파라미터 학습
         train_df = df.iloc[:train_end]
         features_train = self.normalize_features(train_df, feature_columns, fit=True)
@@ -469,6 +488,29 @@ class DataPipeline:
         return train_loader, val_loader, test_loader
 
     # ========== Helper Methods ==========
+
+    @staticmethod
+    def _estimate_required_days(seq_len: int, interval: str) -> int:
+        """
+        데이터 충분성을 위한 최소 일수 추정
+
+        계산 근거:
+        - 기술적 지표로 ~50개 행 손실
+        - Train/Val/Test 분할 (0.7/0.15/0.15)
+        - 각 세트에서 seq_len + 1 필요
+        - Val이 가장 작으므로 (0.15 비율): 전체 필요 = (seq_len + 1) / 0.15
+        """
+        indicator_loss = 50  # 기술적 지표 계산으로 인한 손실
+        min_per_split = seq_len + 10  # 시퀀스 + 약간의 여유
+        total_rows_needed = int(min_per_split / 0.15) + indicator_loss
+
+        # interval별 일당 캔들 수
+        candles_per_day = {"1h": 24, "4h": 6, "1d": 1}.get(interval, 24)
+        required_days = (total_rows_needed // candles_per_day) + 1
+
+        # 최소값 보장
+        min_days = {"1h": 90, "4h": 180, "1d": 730}.get(interval, 90)
+        return max(required_days, min_days)
 
     @staticmethod
     def _compute_rsi(prices: np.ndarray, period: int = 14) -> np.ndarray:

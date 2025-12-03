@@ -18,7 +18,7 @@ def parse_args() -> argparse.Namespace:
 
     # Data
     parser.add_argument("--symbol", type=str, default="BTC", help="Trading pair symbol")
-    parser.add_argument("--interval", type=str, default="1h", help="Candle interval")
+    parser.add_argument("--interval", type=str, default="1h", choices=["1h", "4h", "1d"], help="Candle interval (1h, 4h, 1d)")
     parser.add_argument("--days", type=int, default=365, help="Days of historical data")
     parser.add_argument("--seq-length", type=int, default=60, help="Sequence length")
 
@@ -323,10 +323,11 @@ def main():
     device = get_device()
     print(f"Device: {device}")
 
-    # Symbol-specific paths
+    # Symbol and interval specific paths
     symbol = args.symbol.upper()
-    checkpoint_dir = Path(args.checkpoint_dir) / symbol
-    log_dir = Path(args.log_dir) / symbol
+    interval = args.interval
+    checkpoint_dir = Path(args.checkpoint_dir) / symbol / interval
+    log_dir = Path(args.log_dir) / symbol / interval
     print(f"Checkpoint Dir: {checkpoint_dir}")
     print(f"Log Dir: {log_dir}")
 

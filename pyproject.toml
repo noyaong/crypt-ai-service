@@ -19,6 +19,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "tenacity>=8.2.0",
     "python-binance>=1.0.0",  # Binance API wrapper
+    "openai>=1.0.0",  # OpenAI API for LLM insights
 ]
 
 [project.optional-dependencies]

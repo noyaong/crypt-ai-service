@@ -133,7 +133,7 @@ def get_coin_insight(symbol: str):
         print(f"  {insight}")
 
 
-def predict_price(symbol: str, model_type: str = "transformer", checkpoint_dir: str = "checkpoints"):
+def predict_price(symbol: str, model_type: str = "transformer", checkpoint_dir: str = "checkpoints", interval: str = "1h"):
     """학습된 모델로 가격 예측"""
     from pathlib import Path
 
@@ -143,22 +143,23 @@ def predict_price(symbol: str, model_type: str = "transformer", checkpoint_dir: 
     from crypto_ai.analyzer import get_device
 
     symbol = symbol.upper()
-    print(f"🤖 {symbol} AI 예측")
+    interval_label = {"1h": "1시간봉", "4h": "4시간봉", "1d": "일봉"}.get(interval, interval)
+    print(f"🤖 {symbol} AI 예측 ({interval_label})")
     print("=" * 50)
 
-    # 체크포인트 경로 결정 (코인별 디렉토리)
+    # 체크포인트 경로 결정 (코인별/타임프레임별 디렉토리)
     if model_type == "transformer":
-        checkpoint_path = Path(checkpoint_dir) / "transformer" / symbol / "best.pt"
+        checkpoint_path = Path(checkpoint_dir) / "transformer" / symbol / interval / "best.pt"
     else:
-        checkpoint_path = Path(checkpoint_dir) / "lstm" / symbol / "best.pt"
+        checkpoint_path = Path(checkpoint_dir) / "lstm" / symbol / interval / "best.pt"
 
     if not checkpoint_path.exists():
         print(f"❌ 체크포인트가 없습니다: {checkpoint_path}")
-        print(f"   먼저 {symbol} 모델을 학습하세요:")
+        print(f"   먼저 {symbol} ({interval}) 모델을 학습하세요:")
         if model_type == "transformer":
-            print(f"   uv run python scripts/train_transformer.py --symbol {symbol} --days 90 --epochs 20 --multi-task")
+            print(f"   uv run python scripts/train_transformer.py --symbol {symbol} --interval {interval} --days 90 --epochs 20 --multi-task")
         else:
-            print(f"   uv run python scripts/train.py --symbol {symbol} --days 90 --epochs 20")
+            print(f"   uv run python scripts/train.py --symbol {symbol} --interval {interval} --days 90 --epochs 20")
         sys.exit(1)
 
     print(f"📂 체크포인트: {checkpoint_path}")
@@ -166,9 +167,13 @@ def predict_price(symbol: str, model_type: str = "transformer", checkpoint_dir: 
     device = get_device()
     print(f"📱 Device: {device}")
 
-    # 데이터 수집 (최근 60시간)
-    print(f"\n📊 {symbol} 데이터 수집 중...")
-    config = DataConfig(symbol=symbol, interval="1h", days=7, sequence_length=60)
+    # 데이터 수집 (타임프레임별 적절한 설정)
+    days_map = {"1h": 7, "4h": 30, "1d": 90}  # interval별 적절한 데이터 기간
+    seq_len_map = {"1h": 60, "4h": 60, "1d": 30}  # interval별 시퀀스 길이
+    days = days_map.get(interval, 7)
+    seq_len = seq_len_map.get(interval, 60)
+    print(f"\n📊 {symbol} 데이터 수집 중... ({interval_label}, {days}일, seq={seq_len})")
+    config = DataConfig(symbol=symbol, interval=interval, days=days, sequence_length=seq_len)
     pipeline = DataPipeline(config)
 
     try:
@@ -273,9 +278,103 @@ def predict_price(symbol: str, model_type: str = "transformer", checkpoint_dir: 
     # 최근 가격 정보
     print(f"\n💰 최근 가격:")
     print(f"   현재가: ${latest['close']:,.2f}")
-    print(f"   24h 변동: {latest['returns']*100:+.2f}%")
+    # 24시간 전 대비 변동률 계산
+    if len(df) >= 24:
+        price_24h_ago = df.iloc[-24]['close']
+        change_24h = (latest['close'] - price_24h_ago) / price_24h_ago * 100
+    else:
+        change_24h = latest['returns'] * 100
+    print(f"   24h 변동: {change_24h:+.2f}%")
 
     print(f"\n⚠️  주의: AI 예측은 참고용이며, 투자 결정은 본인 책임입니다.")
+
+
+def ai_insight(symbol: str, checkpoint_dir: str = "checkpoints"):
+    """멀티 타임프레임 AI 인사이트 (LLM 분석)"""
+    from dotenv import load_dotenv
+    from crypto_ai.llm_insight import generate_ai_insight
+
+    load_dotenv()  # 환경변수 로드 (CRYPTOPANIC_API_KEY 등)
+    symbol = symbol.upper()
+    print(f"🤖 {symbol} 멀티 타임프레임 AI 인사이트")
+    print("=" * 60)
+
+    print("📊 타임프레임별 예측 수집 중...")
+    result = generate_ai_insight(symbol, checkpoint_dir)
+
+    if not result["predictions"]:
+        print(f"❌ {symbol} 학습된 모델이 없습니다.")
+        print("   먼저 모델을 학습하세요:")
+        print(f"   uv run python scripts/train_transformer.py --symbol {symbol} --interval 1h --days 90 --epochs 20 --multi-task")
+        sys.exit(1)
+
+    # 타임프레임별 예측 결과 출력
+    timeframe_labels = {"1h": "단기 (1시간봉)", "4h": "중기 (4시간봉)", "1d": "장기 (일봉)"}
+    direction_colors = {"하락": "\033[91m", "횡보": "\033[93m", "상승": "\033[92m"}
+    reset_color = "\033[0m"
+
+    print(f"\n📈 사용 가능한 타임프레임: {', '.join(result['available_timeframes'])}")
+    print("-" * 60)
+
+    for interval, pred in result["predictions"].items():
+        label = timeframe_labels.get(interval, interval)
+        direction = pred["direction"]
+        color = direction_colors.get(direction, "")
+        confidence = pred["confidence"] * 100
+
+        print(f"\n【{label}】")
+        print(f"   예측: {color}{direction}{reset_color} (신뢰도: {confidence:.1f}%)")
+        print(f"   확률: 하락 {pred['probabilities']['하락']*100:.1f}% | 횡보 {pred['probabilities']['횡보']*100:.1f}% | 상승 {pred['probabilities']['상승']*100:.1f}%")
+        print(f"   RSI: {pred['indicators']['rsi']:.1f} | MACD: {pred['indicators']['macd']:.2f} | BB: {pred['indicators']['bb_position']*100:.1f}%")
+
+    # 시장 상황
+    if result["predictions"]:
+        first_pred = next(iter(result["predictions"].values()))
+        fng = first_pred["market"]["fear_greed"]
+        fng_label = "극단적 공포" if fng < 25 else "공포" if fng < 45 else "중립" if fng < 55 else "탐욕" if fng < 75 else "극단적 탐욕"
+
+        print(f"\n🎭 시장 심리")
+        print(f"   Fear & Greed: {fng:.0f} ({fng_label})")
+        print(f"   BTC 도미넌스: {first_pred['market']['btc_dominance']:.1f}%")
+        print(f"   현재가: ${first_pred['price']['current']:,.2f}")
+        print(f"   24h 변동: {first_pred['price']['change_24h']:+.2f}%")
+
+    # 센티멘트 데이터 출력
+    if result.get("sentiment"):
+        sent = result["sentiment"]
+        print(f"\n📰 센티멘트 분석")
+
+        # 뉴스 센티멘트
+        if sent.get("news"):
+            news = sent["news"]
+            total_news = news.get("total_posts", 0)
+            if total_news > 0:
+                score = news.get("sentiment_score") or 0
+                news_label = "긍정적" if score > 0.2 else "부정적" if score < -0.2 else "중립"
+                print(f"   뉴스: {total_news}건 ({news_label})")
+                # 최근 헤드라인 1개 표시
+                headlines = news.get("recent_headlines", [])
+                if headlines:
+                    title = headlines[0].get("title", "")[:50]
+                    print(f"   최근: {title}...")
+
+        # 소셜 지표
+        if sent.get("social"):
+            social = sent["social"]
+            social_label = "높음" if social["score"] > 70 else "보통" if social["score"] > 40 else "낮음"
+            print(f"   소셜 활성도: {social_label} (점수: {social['score']:.1f}/100)")
+
+        # 종합 센티멘트
+        overall_emoji = "🟢" if sent["overall_sentiment"] == "bullish" else "🔴" if sent["overall_sentiment"] == "bearish" else "🟡"
+        print(f"   종합: {overall_emoji} {sent['overall_sentiment'].upper()} (점수: {sent['overall_score']:+.3f})")
+
+    # LLM 인사이트
+    print("\n" + "=" * 60)
+    print("💡 AI 종합 분석 (GPT-4o-mini)")
+    print("=" * 60)
+    print(result["insight"])
+
+    print(f"\n⚠️  주의: AI 분석은 참고용이며, 투자 결정은 본인 책임입니다.")
 
 
 def main():
@@ -310,6 +409,21 @@ def main():
         help="모델 타입 (기본: transformer)"
     )
     predict_parser.add_argument(
+        "--interval", "-i",
+        choices=["1h", "4h", "1d"],
+        default="1h",
+        help="타임프레임 (1h: 1시간봉, 4h: 4시간봉, 1d: 일봉, 기본: 1h)"
+    )
+    predict_parser.add_argument(
+        "--checkpoint-dir", "-c",
+        default="checkpoints",
+        help="체크포인트 디렉토리 (기본: checkpoints)"
+    )
+
+    # insight-ai (LLM 기반 멀티 타임프레임 분석)
+    ai_parser = subparsers.add_parser("insight-ai", help="LLM 기반 멀티 타임프레임 AI 분석")
+    ai_parser.add_argument("symbol", help="코인 심볼 (예: AVAX)")
+    ai_parser.add_argument(
         "--checkpoint-dir", "-c",
         default="checkpoints",
         help="체크포인트 디렉토리 (기본: checkpoints)"
@@ -326,7 +440,9 @@ def main():
     elif args.command == "insight":
         get_coin_insight(args.symbol)
     elif args.command == "predict":
-        predict_price(args.symbol, args.model, args.checkpoint_dir)
+        predict_price(args.symbol, args.model, args.checkpoint_dir, args.interval)
+    elif args.command == "insight-ai":
+        ai_insight(args.symbol, args.checkpoint_dir)
     else:
         parser.print_help()
 

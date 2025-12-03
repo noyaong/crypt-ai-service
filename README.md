@@ -143,16 +143,60 @@ uv run crypto-ai insight AVAX
 ### `predict` - AI 예측
 
 ```bash
-uv run crypto-ai predict BTC                    # Transformer (기본)
+uv run crypto-ai predict BTC                    # Transformer, 1시간봉 (기본)
+uv run crypto-ai predict BTC --interval 4h      # 4시간봉
+uv run crypto-ai predict BTC -i 1d              # 일봉
 uv run crypto-ai predict ETH --model lstm       # LSTM
 uv run crypto-ai predict SOL -m transformer     # 명시적 지정
 ```
+
+**타임프레임 옵션:**
+
+| 옵션 | 설명 | 특징 |
+|------|------|------|
+| `1h` | 1시간봉 (기본) | 단기 트레이딩, 빠른 신호 |
+| `4h` | 4시간봉 | 중기 트레이딩, 노이즈 감소 |
+| `1d` | 일봉 | 장기 투자, 큰 추세 파악 |
 
 **출력 정보:**
 - 가격 방향 예측 (상승/하락/횡보)
 - 확률 분포 (시각화)
 - 변동성/거래량 예측 (Transformer)
 - 현재 기술적 지표 (RSI, MACD, 볼린저)
+
+### `insight-ai` - LLM 멀티 타임프레임 분석
+
+```bash
+uv run crypto-ai insight-ai AVAX
+```
+
+**기능:**
+- 모든 타임프레임(1h, 4h, 1d) 예측 자동 수집
+- 뉴스/소셜 센티멘트 분석
+- GPT-4o-mini를 통한 종합 인사이트 생성
+- 타임프레임 간 컨플루언스(일치/불일치) 분석
+
+**출력 예시:**
+```
+【단기 (1시간봉)】 예측: 하락 (신뢰도: 41.3%)
+【중기 (4시간봉)】 예측: 상승 (신뢰도: 47.7%)
+【장기 (일봉)】    예측: 횡보 (신뢰도: 35.4%)
+
+📰 센티멘트 분석
+   뉴스 센티멘트: 중립 (점수: +0.10)
+   소셜 활성도: 보통 (점수: 45.2/100)
+   종합: 🟡 NEUTRAL (점수: +0.050)
+
+💡 AI 종합 분석: 기술적 분석과 센티멘트를 종합한 인사이트...
+```
+
+**센티멘트 데이터 소스:**
+- Fear & Greed Index (Alternative.me)
+- 뉴스 센티멘트 (CryptoPanic API - 선택적)
+- 소셜 미디어 지표 (CoinGecko community/developer data)
+
+> **필수**: `OPENAI_API_KEY` 환경변수 설정 필요
+> **선택**: `CRYPTOPANIC_API_KEY` 환경변수 (뉴스 센티멘트 향상)
 
 ---
 
@@ -175,7 +219,9 @@ uv run uvicorn crypto_ai.api:app --host 0.0.0.0 --port 8000
 | GET | `/health` | 서비스 상태 |
 | GET | `/price/{symbol}` | 시세 조회 |
 | GET | `/prices?symbols=BTC,ETH` | 다중 시세 |
-| GET | `/predict/{symbol}` | **AI 예측** |
+| GET | `/predict/{symbol}` | AI 예측 (단일 타임프레임) |
+| GET | `/insights/ai/{symbol}` | **LLM 멀티 타임프레임 분석** |
+| GET | `/insights/ai/{symbol}/stream` | **LLM 분석 (SSE 스트리밍)** |
 | GET | `/insights/market` | 시장 인사이트 |
 | GET | `/insights/{symbol}` | 코인 인사이트 |
 | POST | `/analyze/chart` | 차트 분석 |
@@ -183,8 +229,14 @@ uv run uvicorn crypto_ai.api:app --host 0.0.0.0 --port 8000
 ### 예시
 
 ```bash
-# AI 예측
+# AI 예측 (1시간봉, 기본)
 curl http://localhost:8000/predict/BTC
+
+# AI 예측 (4시간봉)
+curl "http://localhost:8000/predict/BTC?interval=4h"
+
+# AI 예측 (일봉, LSTM)
+curl "http://localhost:8000/predict/BTC?interval=1d&model=lstm"
 
 # 응답
 {
@@ -200,6 +252,47 @@ curl http://localhost:8000/predict/BTC
   "price_change_24h": -0.33
 }
 ```
+
+### SSE 스트리밍 (실시간 진행상황)
+
+프론트엔드에서 분석 진행상황을 실시간으로 표시하려면 SSE 스트리밍 엔드포인트를 사용하세요:
+
+```javascript
+// JavaScript 예시
+const eventSource = new EventSource('/insights/ai/BTC/stream');
+
+eventSource.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+
+    if (data.type === 'progress') {
+        // 진행상황 표시
+        console.log(`${data.status} (${Math.round(data.progress * 100)}%)`);
+        // 예: "예측 모델 로드 중... (5%)"
+        // 예: "AI 예측 생성 중... (30%)"
+        // 예: "LLM 인사이트 생성 중... (70%)"
+        updateProgressBar(data.progress);
+    } else if (data.type === 'result') {
+        // 최종 결과
+        console.log('분석 완료:', data.data);
+        eventSource.close();
+    } else if (data.type === 'error') {
+        console.error('오류:', data.message);
+        eventSource.close();
+    }
+};
+```
+
+**진행상황 단계:**
+
+| Step | Status | Progress |
+|------|--------|----------|
+| `init` | 분석 초기화 중... | 0% |
+| `load_model` | 예측 모델 로드 중... | 5% |
+| `fetch_data` | 시장 데이터 수집 중... | 10-50% |
+| `predict` | AI 예측 생성 중... | 20-60% |
+| `collect_sentiment` | 센티멘트 데이터 수집 중... | 60% |
+| `generate_insight` | LLM 인사이트 생성 중... | 70% |
+| `complete` | 분석 완료 | 100% |
 
 **API 문서**: http://localhost:8000/docs
 
@@ -222,6 +315,7 @@ uv run python scripts/train.py \
 ```bash
 uv run python scripts/train_transformer.py \
     --symbol BTC \
+    --interval 1h \
     --days 365 \
     --epochs 100 \
     --multi-task \
@@ -235,6 +329,7 @@ uv run python scripts/train_transformer.py \
 | 옵션 | 설명 | 기본값 |
 |------|------|--------|
 | `--symbol` | 코인 심볼 | BTC |
+| `--interval` | 타임프레임 (1h, 4h, 1d) | 1h |
 | `--days` | 학습 데이터 기간 | 365 |
 | `--epochs` | 에폭 수 | 100 |
 | `--batch-size` | 배치 크기 | 32 |
@@ -244,15 +339,37 @@ uv run python scripts/train_transformer.py \
 | `--num-heads` | Attention 헤드 수 | 4 |
 | `--num-layers` | 레이어 수 | 3 |
 
+### 타임프레임별 학습 예시
+
+```bash
+# 1시간봉 (단기 트레이딩)
+uv run python scripts/train_transformer.py --symbol BTC --interval 1h --days 90 --epochs 20 --multi-task
+
+# 4시간봉 (중기 트레이딩)
+uv run python scripts/train_transformer.py --symbol BTC --interval 4h --days 180 --epochs 30 --multi-task
+
+# 일봉 (장기 투자) - days 730, seq-length 30 권장
+uv run python scripts/train_transformer.py --symbol BTC --interval 1d --days 730 --seq-length 30 --epochs 50 --multi-task
+```
+
+| 타임프레임 | 권장 days | 권장 seq-length | 데이터 수 | 특징 |
+|------------|-----------|-----------------|-----------|------|
+| `1h` | 90~180 | 60 (기본) | 2,160~4,320 | 빠른 신호, 노이즈 많음 |
+| `4h` | 180~365 | 60 (기본) | 1,080~2,190 | 균형 잡힌 신호 |
+| `1d` | **730** | **30** | ~730 | 큰 추세, 충분한 데이터 필요 |
+
+> **주의**: 일봉(`1d`)은 `--days 730 --seq-length 30` 권장
+
 ### 학습 옵션 예시
 
 ```bash
-uv run python scripts/train_transformer.py --symbol AVAX --days 90 --epochs 20 --multi-task
+uv run python scripts/train_transformer.py --symbol AVAX --interval 1h --days 90 --epochs 20 --multi-task
 ```
 
 | 옵션 | 의미 |
 |------|------|
-| `--days 90` | 90일치 1시간봉 = 약 2,160개 데이터 |
+| `--interval 1h` | 1시간봉 데이터 사용 |
+| `--days 90` | 90일치 = 약 2,160개 데이터 |
 | `--epochs 20` | 전체 데이터를 20번 반복 학습 |
 | `--multi-task` | 방향 + 변동성 + 거래량 동시 예측 |
 
@@ -284,9 +401,23 @@ uv run tensorboard --logdir runs
 
 ### 체크포인트
 
-- LSTM: `checkpoints/best.pt`
-- Transformer: `checkpoints/transformer/best.pt`
-- Attention 시각화: `checkpoints/transformer/attention.png`
+체크포인트는 **코인별 + 타임프레임별**로 저장됩니다:
+
+```
+checkpoints/
+├── transformer/
+│   ├── BTC/
+│   │   ├── 1h/best.pt      # BTC 1시간봉
+│   │   ├── 4h/best.pt      # BTC 4시간봉
+│   │   └── 1d/best.pt      # BTC 일봉
+│   └── AVAX/
+│       └── 1h/best.pt      # AVAX 1시간봉
+└── lstm/
+    └── BTC/
+        └── 1h/best.pt
+```
+
+- Attention 시각화: `checkpoints/transformer/{SYMBOL}/{INTERVAL}/attention.png`
 
 ### 주기적 재학습 (배치 작업)
 
@@ -302,14 +433,16 @@ uv run tensorboard --logdir runs
 
 ```bash
 # crontab -e
-0 3 * * 0 cd /path/to/crypto-ai-service && uv run python scripts/train_transformer.py --symbol BTC --days 90 --epochs 20 --multi-task >> logs/train.log 2>&1
+0 3 * * 0 cd /path/to/crypto-ai-service && uv run python scripts/train_transformer.py --symbol BTC --interval 1h --days 90 --epochs 20 --multi-task >> logs/train.log 2>&1
 ```
 
-**여러 코인 학습:**
+**여러 코인 + 타임프레임 학습:**
 
 ```bash
 for symbol in BTC ETH AVAX SOL; do
-  uv run python scripts/train_transformer.py --symbol $symbol --days 90 --epochs 20 --multi-task
+  for interval in 1h 4h 1d; do
+    uv run python scripts/train_transformer.py --symbol $symbol --interval $interval --days 90 --epochs 20 --multi-task
+  done
 done
 ```
 
@@ -395,11 +528,12 @@ crypto-ai-service/
 │   ├── cli.py                  # CLI 명령어
 │   ├── api.py                  # FastAPI 서버
 │   ├── client.py               # CoinMarketCap 클라이언트
-│   ├── data_sources.py         # Binance/CoinGecko/Alternative.me
+│   ├── data_sources.py         # Binance/CoinGecko/Alternative.me/CryptoPanic
 │   ├── analyzer.py             # LSTM 모델
 │   ├── transformer.py          # Transformer 모델
 │   ├── preprocessing.py        # 데이터 전처리
 │   ├── insight.py              # 인사이트 생성
+│   ├── llm_insight.py          # LLM 기반 멀티타임프레임 분석
 │   └── models.py               # Pydantic 모델
 ├── scripts/
 │   ├── train.py                # LSTM 학습
@@ -416,8 +550,9 @@ crypto-ai-service/
 | 소스 | 용도 | API 키 | Rate Limit | 문서 |
 |------|------|--------|------------|------|
 | **Binance** | OHLCV 히스토리 | 불필요 | 1200/분 | [링크](https://binance-docs.github.io/apidocs/spot/en/) |
-| **CoinGecko** | 시세, 메타데이터 | 불필요 | 30/분 | [링크](https://www.coingecko.com/en/api/documentation) |
-| **Alternative.me** | Fear & Greed | 불필요 | 60/분 | [링크](https://alternative.me/crypto/api/) |
+| **CoinGecko** | 시세, 메타데이터, 소셜지표 | 불필요 | 30/분 | [링크](https://www.coingecko.com/en/api/documentation) |
+| **Alternative.me** | Fear & Greed Index | 불필요 | 60/분 | [링크](https://alternative.me/crypto/api/) |
+| **CryptoPanic** | 뉴스 센티멘트 | 필요 (무료) | 5/분 | [링크](https://cryptopanic.com/developers/api/) |
 | **CoinMarketCap** | 시세, 글로벌 | 필요 | 30/분 | [링크](https://coinmarketcap.com/api/) |
 
 ---
@@ -451,6 +586,7 @@ uv run tensorboard --logdir runs
 
 - [ROADMAP.md](ROADMAP.md) - 개발 로드맵 및 진행 상황
 - [docs/MODELS.md](docs/MODELS.md) - AI 모델 아키텍처 상세 설명
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - 시스템 아키텍처 및 플로우 차트
 
 ---
 

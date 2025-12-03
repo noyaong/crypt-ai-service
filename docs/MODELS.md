@@ -87,11 +87,14 @@ Softmax
 ### 사용법
 
 ```bash
-# 학습
-uv run python scripts/train.py --symbol BTC --days 180 --epochs 50
+# 학습 (1시간봉)
+uv run python scripts/train.py --symbol BTC --interval 1h --days 180 --epochs 50
+
+# 학습 (4시간봉)
+uv run python scripts/train.py --symbol BTC --interval 4h --days 365 --epochs 50
 
 # 예측
-uv run crypto-ai predict BTC --model lstm
+uv run crypto-ai predict BTC --model lstm --interval 1h
 ```
 
 ---
@@ -188,20 +191,31 @@ Global Average Pooling
 ### 사용법
 
 ```bash
-# 학습 (멀티태스크)
+# 학습 (1시간봉, 멀티태스크)
 uv run python scripts/train_transformer.py \
     --symbol BTC \
+    --interval 1h \
     --days 365 \
     --epochs 100 \
     --multi-task
 
-# 예측
-uv run crypto-ai predict BTC --model transformer
+# 학습 (4시간봉)
+uv run python scripts/train_transformer.py \
+    --symbol BTC \
+    --interval 4h \
+    --days 365 \
+    --epochs 100 \
+    --multi-task
+
+# 예측 (타임프레임별)
+uv run crypto-ai predict BTC --model transformer --interval 1h
+uv run crypto-ai predict BTC --model transformer --interval 4h
+uv run crypto-ai predict BTC --model transformer --interval 1d
 ```
 
 ### Attention 시각화
 
-학습 후 `checkpoints/transformer/attention.png`에서 Attention 패턴을 확인할 수 있습니다.
+학습 후 `checkpoints/transformer/{SYMBOL}/{INTERVAL}/attention.png`에서 Attention 패턴을 확인할 수 있습니다.
 
 ```python
 # 코드로 시각화
@@ -317,26 +331,30 @@ total_loss = 1.0 * direction_loss    # 가격 방향 (주요)
 
 **테스트/개발:**
 ```bash
-# LSTM, 빠른 확인
-uv run python scripts/train.py --days 60 --epochs 10
+# LSTM, 빠른 확인 (1시간봉)
+uv run python scripts/train.py --interval 1h --days 60 --epochs 10
 ```
 
 **프로덕션:**
 ```bash
-# Transformer, 멀티태스크
-uv run python scripts/train_transformer.py \
-    --days 365 \
-    --epochs 100 \
-    --multi-task \
-    --d-model 128 \
-    --num-heads 8
+# Transformer, 멀티태스크 (여러 타임프레임)
+for interval in 1h 4h 1d; do
+  uv run python scripts/train_transformer.py \
+      --symbol BTC \
+      --interval $interval \
+      --days 365 \
+      --epochs 100 \
+      --multi-task \
+      --d-model 128 \
+      --num-heads 8
+done
 ```
 
 ---
 
 ## 기술적 지표 입력
 
-두 모델 모두 동일한 9개 특성을 입력으로 사용합니다:
+두 모델 모두 동일한 **13개 특성**을 입력으로 사용합니다:
 
 | 특성 | 설명 | 범위 |
 |------|------|------|
@@ -349,6 +367,26 @@ uv run python scripts/train_transformer.py \
 | `bb_position` | 볼린저밴드 위치 | 0~1 |
 | `volume_ratio` | 거래량/이동평균 | 정규화 |
 | `atr` | ATR (14) | 정규화 |
+| `fear_greed` | Fear & Greed Index | 0~100 |
+| `fear_greed_ma7` | Fear & Greed 7일 이동평균 | 0~100 |
+| `fear_greed_change` | Fear & Greed 변화율 | 정규화 |
+| `btc_dominance` | BTC 시장 점유율 | % |
+
+> 시장 심리 지표 (fear_greed, btc_dominance)는 Alternative.me와 CoinGecko API에서 실시간 수집됩니다.
+
+---
+
+## 타임프레임별 특징
+
+| 타임프레임 | 캔들 | RSI/MACD 기간 | 권장 seq-length | 권장 days | 권장 용도 |
+|------------|------|---------------|-----------------|-----------|-----------|
+| `1h` | 1시간봉 | 14시간 | 60 | 90~180 | 단기 트레이딩, 스캘핑 |
+| `4h` | 4시간봉 | 56시간 (2.3일) | 60 | 180~365 | 스윙 트레이딩 |
+| `1d` | 일봉 | 14일 | **30** | **730** | 포지션 트레이딩, 장기 투자 |
+
+각 타임프레임별로 별도 모델을 학습하고, 예측 시 해당 타임프레임 모델을 사용합니다.
+
+> **주의**: 일봉(`1d`)은 `--days 730 --seq-length 30` 권장. 데이터가 부족하면 학습이 실패합니다.
 
 ---
 
